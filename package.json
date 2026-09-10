@@ -1,0 +1,216 @@
+{
+  "name": "pi-ide-commiter",
+  "displayName": "pi IDE Commiter",
+  "description": "Generates commit messages with the pi (pi.dev) agent running in the background over RPC.",
+  "icon": "media/icon.png",
+  "version": "0.4.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "AI"
+  ],
+  "keywords": [
+    "git",
+    "commit",
+    "pi",
+    "ai"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "pi-ide-commiter.generate",
+        "title": "pi IDE Commiter: Generate commit message",
+        "icon": {
+          "light": "media/pi-light.svg",
+          "dark": "media/pi-dark.svg"
+        }
+      },
+      {
+        "command": "pi-ide-commiter.selectModel",
+        "title": "pi IDE Commiter: Select commit model",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "pi-ide-commiter.editInstructions",
+        "title": "pi IDE Commiter: Edit commit instructions",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "pi-ide-commiter.restart",
+        "title": "pi IDE Commiter: Restart background agent"
+      },
+      {
+        "command": "pi-ide-commiter.showLog",
+        "title": "pi IDE Commiter: Open log"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "pi-ide-commiter.generate",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        },
+        {
+          "command": "pi-ide-commiter.selectModel",
+          "group": "1_pi@1",
+          "when": "scmProvider == git"
+        },
+        {
+          "command": "pi-ide-commiter.editInstructions",
+          "group": "1_pi@2",
+          "when": "scmProvider == git"
+        }
+      ],
+      "scm/inputBox": [
+        {
+          "command": "pi-ide-commiter.generate",
+          "when": "scmProvider == git"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "pi IDE Commiter",
+      "properties": {
+        "pi-ide-commiter.piPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `pi` executable. **Empty means automatic detection** (inherited PATH, login shell, and known install directories). Only set this if detection fails — use the output of `which pi`."
+        },
+        "pi-ide-commiter.provider": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "pi's `--provider`. Empty uses pi's own default. Prefer the **pi IDE Commiter: Select model** command, which lists what is configured instead of making you type it."
+        },
+        "pi-ide-commiter.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "pi's `--model`. Empty uses pi's own default. Prefer the **pi IDE Commiter: Select model** command."
+        },
+        "pi-ide-commiter.thinking": {
+          "type": "string",
+          "enum": [
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "off",
+          "description": "Thinking level. 'off' is recommended: a commit message does not need long reasoning."
+        },
+        "pi-ide-commiter.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra arguments passed to the pi process in RPC mode."
+        },
+        "pi-ide-commiter.style": {
+          "type": "string",
+          "enum": [
+            "conventional",
+            "plain"
+          ],
+          "default": "conventional",
+          "description": "'conventional' = <type>(<scope>): <subject>. 'plain' = a bare imperative subject."
+        },
+        "pi-ide-commiter.includeBody": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow a multi-line body explaining why. Off generates the subject only."
+        },
+        "pi-ide-commiter.maxSubjectLength": {
+          "type": "number",
+          "default": 72,
+          "description": "Maximum length of the commit subject."
+        },
+        "pi-ide-commiter.language": {
+          "type": "string",
+          "default": "english",
+          "description": "Language of the commit message (e.g. english, portuguese)."
+        },
+        "pi-ide-commiter.customInstructions": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "markdownDescription": "Extra instructions appended to the built-in prompt, e.g. `Always prefix the subject with the Jira ticket from the branch name.` Where these conflict with the built-in rules, the model is told to follow yours. Resolved per folder, so `.vscode/settings.json` gives one repository its own house style."
+        },
+        "pi-ide-commiter.systemPrompt": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "markdownDescription": "**Advanced.** Replaces the built-in rules entirely — style, subject length and body settings stop applying. Leave empty to use the built-in prompt. `customInstructions` is still appended on top. Your prompt must tell the model to reply with the commit message only."
+        },
+        "pi-ide-commiter.maxFiles": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Maximum number of files with a diff; beyond that it degrades to a `--stat` summary. **0 = automatic**, derived from the model's context window."
+        },
+        "pi-ide-commiter.maxFileDiffBytes": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Per-file diff budget, in chars. **0 = automatic**, derived from the model's context window."
+        },
+        "pi-ide-commiter.maxTotalDiffBytes": {
+          "type": "number",
+          "default": 0,
+          "markdownDescription": "Total diff budget, in chars. **0 = automatic**, derived from the model's context window — more context means a more accurate commit message."
+        },
+        "pi-ide-commiter.recentCommitCount": {
+          "type": "number",
+          "default": 10,
+          "description": "How many recent commit subjects to send so the model matches the repository's style. 0 disables it."
+        },
+        "pi-ide-commiter.timeoutMs": {
+          "type": "number",
+          "default": 90000,
+          "description": "Timeout for a single generation, in ms."
+        },
+        "pi-ide-commiter.warmOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the background pi process when the workspace opens, so the first commit skips the cold start."
+        },
+        "pi-ide-commiter.idleShutdownMs": {
+          "type": "number",
+          "default": 1800000,
+          "description": "Shut down the idle pi process after this long (ms). 0 = never."
+        },
+        "pi-ide-commiter.replaceExistingMessage": {
+          "type": "boolean",
+          "default": false,
+          "description": "When on, overwrite whatever is already in the commit box without asking."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "npm run compile && vsce package --no-dependencies",
+    "test": "npm run compile && node test/run-tests.js",
+    "test:real": "npm run compile && node test/real-pi-handshake.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
+    "typescript": "^5.4.0"
+  }
+}
