@@ -238,7 +238,7 @@ async function selectModelCommand(arg: unknown): Promise<void> {
 			const active = current.provider === model.provider && current.model === model.id;
 			items.push({
 				label: model.name ?? model.id,
-				description: describeModel(model),
+				description: `${model.provider} · ${describeModel(model)}`,
 				detail: model.id,
 				picked: active,
 				model,
