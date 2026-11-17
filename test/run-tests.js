@@ -255,6 +255,54 @@ function tmpRepo() {
 		fs.rmSync(dir, { recursive: true, force: true });
 	});
 
+	await test("source ranks before tests/docs, generated files are listed by name, headers are stripped", async () => {
+		const { dir, git } = tmpRepo();
+		fs.mkdirSync(path.join(dir, "dist"));
+		fs.writeFileSync(path.join(dir, "a.md"), "docs\n");
+		fs.writeFileSync(path.join(dir, "a.test.js"), "t\n");
+		fs.writeFileSync(path.join(dir, "dist", "x.js"), "gen\n");
+		fs.writeFileSync(path.join(dir, "z.js"), "src\n");
+		git("add", ".");
+		const ctx = await gatherCommitContext(dir, FIXED_BUDGET);
+		assert.deepStrictEqual(ctx.fileDiffs.map((d) => d.file), ["z.js", "a.test.js", "a.md"]);
+		assert.ok(ctx.omitted.includes("dist/x.js"));
+		assert.ok(!ctx.fileDiffs[0].diff.includes("index "), "header noise leaked");
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	await test("a huge diff is cut at a hunk boundary and small ones stay whole", async () => {
+		const { dir, git } = tmpRepo();
+		const big = Array.from({ length: 400 }, (_, i) => `line ${i}`);
+		fs.writeFileSync(path.join(dir, "big.txt"), big.join("\n") + "\n");
+		fs.writeFileSync(path.join(dir, "small.txt"), "tiny\n");
+		git("add", ".");
+		git("commit", "-q", "-m", "base");
+		for (const i of [5, 200, 380]) for (let k = 0; k < 10; k++) big[i + k] = `changed ${i + k}`;
+		fs.writeFileSync(path.join(dir, "big.txt"), big.join("\n") + "\n");
+		fs.writeFileSync(path.join(dir, "small.txt"), "tiny changed\n");
+		git("add", ".");
+		const ctx = await gatherCommitContext(dir, { maxFiles: 20, maxFileDiffBytes: 400, maxTotalDiffBytes: 1000, recentCommitCount: 0 });
+		const small = ctx.fileDiffs.find((d) => d.file === "small.txt");
+		const bigD = ctx.fileDiffs.find((d) => d.file === "big.txt");
+		assert.ok(small && !small.diff.includes("truncated"), "small diff should stay whole");
+		assert.ok(bigD.diff.includes("truncated") && bigD.diff.includes("@@"), "big diff should keep a whole hunk");
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
+	await test("files matching .gitignore are listed by name, even when tracked", async () => {
+		const { dir, git } = tmpRepo();
+		fs.writeFileSync(path.join(dir, "secret.cfg"), "x=1\n");
+		fs.writeFileSync(path.join(dir, "src.js"), "const a = 1;\n");
+		git("add", "-f", "secret.cfg", "src.js");
+		fs.writeFileSync(path.join(dir, ".gitignore"), "*.cfg\n");
+		git("add", ".gitignore");
+		const ctx = await gatherCommitContext(dir, FIXED_BUDGET);
+		assert.ok(ctx.omitted.includes("secret.cfg"));
+		assert.ok(!ctx.fileDiffs.some((d) => d.file === "secret.cfg"));
+		assert.ok(ctx.fileDiffs.some((d) => d.file === "src.js"));
+		fs.rmSync(dir, { recursive: true, force: true });
+	});
+
 	await test("a clean repository raises NoChangesError", async () => {
 		const { dir } = tmpRepo();
 		await assert.rejects(() => gatherCommitContext(dir, FIXED_BUDGET), NoChangesError);
@@ -373,7 +421,7 @@ function tmpRepo() {
 				assert.ok(declared.has(entry.command), `${menu} references undeclared ${entry.command}`);
 			}
 		}
-		for (const key of Object.keys(manifest.contributes.configuration.properties)) {
+		for (const key of manifest.contributes.configuration.flatMap((c) => Object.keys(c.properties))) {
 			assert.ok(key.startsWith("pi-ide-commiter."), `setting ${key} has the wrong prefix`);
 		}
 	});

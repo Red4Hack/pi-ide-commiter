@@ -109,7 +109,7 @@ export function buildUserMessage(ctx: CommitContext): string {
 	if (ctx.omitted.length > 0) {
 		parts.push(
 			"",
-			`Changed files whose diff was not sent (lockfiles or over the file limit): ${ctx.omitted.join(", ")}`,
+			`Changed files whose diff was not sent (lockfiles, generated/binary files or over the file limit): ${ctx.omitted.join(", ")}`,
 		);
 	}
 

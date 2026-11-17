@@ -53,13 +53,16 @@ export class NoChangesError extends Error {}
 export async function runGit(
 	cwd: string,
 	args: string[],
+	input?: string,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
 	try {
-		const { stdout, stderr } = await execFileAsync("git", args, {
+		const pending = execFileAsync("git", args, {
 			cwd,
 			maxBuffer: 64 * 1024 * 1024,
 			encoding: "utf8",
 		});
+		if (input !== undefined) pending.child.stdin?.end(input);
+		const { stdout, stderr } = await pending;
 		return { code: 0, stdout, stderr };
 	} catch (err) {
 		const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
@@ -88,14 +91,60 @@ export function parsePorcelain(stdout: string): { files: string[]; untracked: Se
 	return { files, untracked };
 }
 
+/** Generated, bundled or binary files: their diff says nothing about intent. */
+const GENERATED = /(^|\/)(dist|build|out|coverage|node_modules|vendor)\/|\.(min\.js|min\.css|map|snap|png|jpe?g|gif|webp|ico|pdf|woff2?|ttf|zip|vsix)$/i;
+
 function isNoisy(file: string): boolean {
 	const base = file.split("/").pop() ?? file;
-	return NOISY_FILES.includes(base);
+	return NOISY_FILES.includes(base) || GENERATED.test(file);
 }
 
-function truncate(text: string, maxBytes: number): { text: string; truncated: boolean } {
-	if (text.length <= maxBytes) return { text, truncated: false };
-	return { text: `${text.slice(0, maxBytes)}\n… (diff truncated)`, truncated: true };
+/** Lower = more informative about intent, so it gets budget first. */
+function rank(file: string): number {
+	if (/(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z]+$/i.test(file)) return 2;
+	if (/\.(md|mdx|rst)$/i.test(file) || /(^|\/)docs?\//i.test(file)) return 3;
+	if (/\.(json|ya?ml|toml|ini|cfg)$/i.test(file)) return 1;
+	return 0;
+}
+
+/** The "### file ###" header already names the file; drop diff --git/index/---/+++ lines. */
+function stripHeader(diff: string): string {
+	const lines = diff.split("\n");
+	const hunk = lines.findIndex((l) => l.startsWith("@@"));
+	const end = hunk < 0 ? lines.length : hunk;
+	const head = lines.slice(0, end).filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l));
+	return [...head, ...lines.slice(end)].join("\n").trim();
+}
+
+const NOTE = "\n… (diff truncated)";
+
+/** Keeps whole hunks while they fit; only cuts inside a hunk when even the first one is too big. */
+function truncateByHunks(diff: string, limit: number): { text: string; truncated: boolean } {
+	if (diff.length <= limit) return { text: diff, truncated: false };
+	const room = Math.max(0, limit - NOTE.length);
+	let out = "";
+	for (const hunk of diff.split(/\n(?=@@ )/)) {
+		const next = out ? `${out}\n${hunk}` : hunk;
+		if (next.length > room) break;
+		out = next;
+	}
+	if (!out) {
+		const head = diff.slice(0, room);
+		out = head.slice(0, head.lastIndexOf("\n") > 0 ? head.lastIndexOf("\n") : room);
+	}
+	return { text: out + NOTE, truncated: true };
+}
+
+/** Water-filling: small diffs stay whole, the leftover budget flows to the big ones. */
+function allocate(sizes: number[], total: number, perFile: number): number[] {
+	const order = sizes.map((_, i) => i).sort((a, b) => sizes[a] - sizes[b]);
+	const limits = new Array<number>(sizes.length).fill(0);
+	let left = total;
+	order.forEach((i, k) => {
+		limits[i] = Math.min(sizes[i], perFile, Math.floor(left / (order.length - k)));
+		left -= limits[i];
+	});
+	return limits;
 }
 
 export async function gatherCommitContext(
@@ -130,44 +179,50 @@ export async function gatherCommitContext(
 
 	const omitted: string[] = [];
 	const candidates: string[] = [];
+	// --no-index also flags tracked files that match .gitignore (e.g. a committed node_modules).
+	const ignored = new Set(
+		(await runGit(cwd, ["check-ignore", "--no-index", "-z", "--stdin"], allFiles.join("\0"))).stdout
+			.split("\0")
+			.filter(Boolean),
+	);
 	for (const file of allFiles) {
-		if (isNoisy(file)) omitted.push(file);
+		if (ignored.has(file) || isNoisy(file)) omitted.push(file);
 		else candidates.push(file);
 	}
-	if (candidates.length > opts.maxFiles) {
-		omitted.push(...candidates.slice(opts.maxFiles));
-	}
-	const diffFiles = candidates.slice(0, opts.maxFiles);
+	// Stable sort: source before config, tests, docs; git order within a tier.
+	candidates.sort((a, b) => rank(a) - rank(b));
+	omitted.push(...candidates.slice(opts.maxFiles));
 
 	let truncated = omitted.length > 0;
-	let budget = opts.maxTotalDiffBytes;
-	const fileDiffs: Array<{ file: string; diff: string }> = [];
 
-	for (const file of diffFiles) {
-		if (budget <= 0) {
-			truncated = true;
-			break;
-		}
+	const fetched = (
+		await Promise.all(
+			candidates.slice(0, opts.maxFiles).map(async (file) => {
+				const args =
+					!staged && untracked.has(file)
+						? ["diff", "-U2", "--no-index", "--", "/dev/null", file] // untracked: not in `git diff`
+						: [...diffBase, "-U2", "--", file];
+				const diff = stripHeader((await runGit(cwd, args)).stdout);
+				return diff ? { file, diff } : undefined;
+			}),
+		)
+	).filter((d): d is { file: string; diff: string } => d !== undefined);
 
-		let raw: string;
-		if (!staged && untracked.has(file)) {
-			// Untracked files do not show up in `git diff`; diff against /dev/null
-			// to get a real diff instead of dumping the whole file.
-			const res = await runGit(cwd, ["diff", "--no-index", "--", "/dev/null", file]);
-			raw = res.stdout.trim();
-			if (!raw) continue;
-		} else {
-			const res = await runGit(cwd, [...diffBase, "--", file]);
-			raw = res.stdout.trim();
-			if (!raw) continue;
-		}
-
-		const perFile = Math.min(opts.maxFileDiffBytes, budget);
-		const { text, truncated: cut } = truncate(raw, perFile);
-		if (cut) truncated = true;
-		budget -= text.length;
-		fileDiffs.push({ file, diff: text });
+	// Too many files for a meaningful slice each: drop the lowest-ranked ones.
+	const minShare = Math.min(300, opts.maxFileDiffBytes);
+	const sizes = () => fetched.map((d) => d.diff.length);
+	let limits = allocate(sizes(), opts.maxTotalDiffBytes, opts.maxFileDiffBytes);
+	while (fetched.length > 1 && limits.some((l, i) => l < Math.min(fetched[i].diff.length, minShare))) {
+		omitted.push(fetched.pop()!.file);
+		truncated = true;
+		limits = allocate(sizes(), opts.maxTotalDiffBytes, opts.maxFileDiffBytes);
 	}
+
+	const fileDiffs = fetched.map(({ file, diff }, i) => {
+		const cutRes = truncateByHunks(diff, limits[i]);
+		if (cutRes.truncated) truncated = true;
+		return { file, diff: cutRes.text };
+	});
 
 	return {
 		branch: branchRes.stdout.trim(),

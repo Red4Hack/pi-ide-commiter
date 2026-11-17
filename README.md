@@ -151,7 +151,7 @@ Requires `pi` installed with an authenticated provider (`pi auth check --provide
 **From the packaged `.vsix`:**
 
 ```bash
-code --install-extension pi-ide-commiter-0.4.0.vsix
+code --install-extension pi-ide-commiter-0.5.0.vsix
 ```
 
 Or through the UI: Extensions panel → `...` → *Install from VSIX...*
