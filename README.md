@@ -48,18 +48,25 @@ without helping write a commit message:
 
 - per-file and total budgets, **derived automatically from the model's context
   window** (see [Automatic budget](#automatic-budget));
-- when the budget is exceeded, it degrades to the `--stat` summary instead of
-  cutting blindly;
-- lockfiles (`package-lock.json`, `Cargo.lock`, `go.sum`, …) are listed **by name**,
+- the budget is split fairly: small diffs stay whole, only huge ones are shrunk;
+- files are ranked so source code gets budget before config, tests and docs, and
+  the least important ones are the first to be dropped;
+- cuts happen at **hunk boundaries** instead of in the middle of a hunk, with a
+  `… (diff truncated)` marker; anything cut is still covered by `--stat`;
+- diffs use `-U2` and drop the `diff --git` / `index` / `---` / `+++` lines (the
+  file name is already in the prompt), keeping rename, mode and binary notices;
+- files matching `.gitignore` (even if tracked), lockfiles (`package-lock.json`,
+  `Cargo.lock`, `go.sum`, …) and generated/binary files (`dist/`, `build/`,
+  `*.min.js`, `*.map`, `*.snap`, images, fonts, `.vsix`) are listed **by name**,
   never by diff;
-- a file cap, with the overflow covered by `--stat`;
 - recent commit subjects ride along so the model matches the repository's style.
 
-Measured on a realistic commit with a lockfile in the mix:
+Measured on a realistic commit (three source files, one test and a 1,500-package
+lockfile rewrite):
 
 ```
-raw repository diff : 60,708 chars
-total sent to pi    :  1,794 chars  (~449 tokens)
+raw repository diff : 331,522 chars
+total sent to pi    :   2,287 chars  (~653 tokens)
 ```
 
 ## Model
@@ -183,6 +190,9 @@ setting instead of sending you hunting.
 
 ## Settings
 
+In the VS Code Settings UI they are grouped into five sections: *Agent (pi)*,
+*Message format*, *Prompt (advanced)*, *Diff context* and *Behavior*.
+
 | Key | Default | Description |
 |---|---|---|
 | `pi-ide-commiter.piPath` | *(empty)* | Path to pi; empty = automatic detection |
@@ -229,7 +239,7 @@ Two behaviours of pi's RPC mode that this implementation handles explicitly:
 ## Tests and CI
 
 ```bash
-npm test            # 36 tests: framing, discovery, budget, prompt, manifest, git
+npm test            # 39 tests: framing, discovery, budget, prompt, manifest, git
 npm run test:real   # handshake against the real pi binary (spends no credit)
 ```
 
